@@ -1,0 +1,126 @@
+# Solar EV RL Configuration
+# All parameters for training, environment, and export
+
+# =============================================================================
+# ENVIRONMENT PARAMETERS
+# =============================================================================
+environment:
+  # Time discretization
+  timestep_minutes: 15          # Each step = 15 minutes
+  max_episode_steps: 96         # Max 24 hours (96 * 15min = 24h)
+  
+  # EV Battery
+  battery_capacity_kwh: 75.0    # EV battery capacity (kWh)
+  max_charging_power_kw: 7.4    # Maximum charging rate (kW)
+  charging_efficiency: 0.90     # η = 90%
+  initial_soc_range: [0.2, 0.5] # Random initial SoC
+  target_soc: 0.90              # Desired SoC at departure
+  
+  # Solar PV Model
+  solar:
+    peak_output_kw: 10.0        # Maximum solar output
+    sunrise_hour: 6.0           # Hour when sun rises
+    sunset_hour: 20.0           # Hour when sun sets
+    noise_std: 0.5              # Gaussian noise on solar output
+    ar1_coefficient: 0.7        # AR(1) autocorrelation for forecast error
+    forecast_bias: 0.1          # Systematic forecast optimism
+    forecast_horizon: 4         # Steps ahead for forecast
+  
+  # Grid Pricing (Time-of-Use)
+  grid:
+    off_peak_price: 0.10        # $/kWh during off-peak (11 PM - 9 AM)
+    mid_price: 0.20             # $/kWh during mid (9 AM - 4 PM, 9 PM - 11 PM)
+    peak_price: 0.30            # $/kWh during peak (4 PM - 9 PM)
+
+# =============================================================================
+# DEPARTURE MODEL (Non-stationary, unknown to agent)
+# =============================================================================
+departure:
+  # User type distribution (hidden from agent)
+  num_user_types: 3
+  
+  # Base hazard rates for each user type (probability of leaving per step)
+  # Type 0: Early leaver (morning commuter)
+  # Type 1: Mid-day leaver (flexible worker)  
+  # Type 2: Late leaver (evening departure)
+  base_hazard_rates: [0.02, 0.01, 0.005]
+  
+  # Time-dependent hazard multipliers (increases probability over time)
+  time_hazard_scale: 0.001      # Hazard increases with elapsed time
+  
+  # Non-stationarity: user type distribution drifts over training
+  drift_rate: 0.0001            # How fast user distribution changes
+  drift_period_episodes: 1000   # Episodes per drift cycle
+  
+  # Minimum stay time (steps) before departure possible
+  min_stay_steps: 4             # At least 1 hour connected
+
+# =============================================================================
+# REWARD FUNCTION
+# =============================================================================
+reward:
+  # Per-step cost: negative of grid energy cost
+  grid_cost_weight: 1.0
+  
+  # Terminal penalty for undercharging
+  undercharge_penalty_lambda: 50.0  # λ in -λ * max(0, target - final_soc)
+  
+  # Small bonus for using solar (encourages solar-first behavior)
+  solar_bonus_weight: 0.1
+
+# =============================================================================
+# TRAINING PARAMETERS
+# =============================================================================
+training:
+  # Total training
+  total_timesteps: 500000       # Total environment steps
+  
+  # RecurrentPPO hyperparameters
+  learning_rate: 0.0003
+  n_steps: 2048                 # Steps per update
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99                   # Discount factor
+  gae_lambda: 0.95              # GAE parameter
+  clip_range: 0.2               # PPO clipping
+  ent_coef: 0.01                # Entropy bonus (exploration)
+  vf_coef: 0.5                  # Value function coefficient
+  max_grad_norm: 0.5            # Gradient clipping
+  
+  # LSTM configuration
+  lstm_hidden_size: 64          # LSTM hidden state dimension
+  n_lstm_layers: 1              # Number of LSTM layers
+  
+  # Environment vectorization
+  n_envs: 4                     # Number of parallel environments
+  
+  # Checkpointing
+  save_freq: 10000              # Save model every N steps
+  eval_freq: 5000               # Evaluate every N steps
+  n_eval_episodes: 10           # Episodes per evaluation
+  
+  # Logging
+  log_interval: 10              # Log every N updates
+  verbose: 1
+
+# =============================================================================
+# EXPORT PARAMETERS
+# =============================================================================
+export:
+  onnx_opset_version: 14        # ONNX opset version
+  input_batch_size: 1           # Fixed batch size for mobile
+  model_name: "solar_ev_policy" # Output model name
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+  model_dir: "trained_models"
+  log_dir: "logs"
+  export_dir: "exported_models"
+
+# =============================================================================
+# REPRODUCIBILITY
+# =============================================================================
+seed: 42
+deterministic: true

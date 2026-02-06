@@ -1,0 +1,28 @@
+# Solar EV RL - Requirements
+# Designed for ARM64 Snapdragon CPU training + Android ONNX inference
+
+# Core ML
+torch>=2.0.0  # CPU version, no CUDA needed
+numpy>=1.24.0
+
+# Reinforcement Learning
+gymnasium>=0.29.0
+stable-baselines3>=2.1.0
+sb3-contrib>=2.1.0  # For RecurrentPPO
+
+# ONNX Export & Inference
+onnx>=1.14.0
+onnxruntime>=1.15.0  # CPU runtime for training machine
+# For Android: use onnxruntime-android in the mobile app
+
+# Configuration & Utilities
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# Evaluation & Logging
+tensorboard>=2.13.0
+matplotlib>=3.7.0
+pandas>=2.0.0
+
+# Optional: for reproducibility
+scipy>=1.10.0
