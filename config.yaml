@@ -1,42 +1,57 @@
-# Cart-Pole PPO Configuration
+# Solar-Arbitrage EV Controller Configuration
 
-# Environment Physics Parameters
+# Environment Parameters
 environment:
-  gravity: 9.8                          # Gravitational acceleration (m/s^2)
-  cart_mass: 1.0                        # Mass of the cart (kg)
-  pole_mass: 0.1                        # Mass of the pole (kg)
-  pole_half_length: 0.5                 # Half length of the pole (m)
-  force_magnitude: 10.0                 # Magnitude of force applied to cart (N)
-  time_step: 0.02                       # Time between state updates (seconds)
-  position_threshold: 2.4               # Cart position limit (m)
-  angle_threshold_degrees: 12           # Pole angle limit (degrees)
+  # EV Battery Constraints
+  ev_capacity_kwh: 75.0                 # EV battery capacity (kWh)
+  charging_efficiency: 0.90             # Charging efficiency (η = 0.90)
+  max_charging_power_kw: 7.4            # Maximum charging power (kW)
+  
+  # Solar Generation Parameters
+  max_solar_output_kw: 10.0             # Maximum solar output (0-10 kW)
+  solar_noise_std: 0.5                  # Standard deviation of Gaussian noise for solar
+  
+  # Time-of-Use Pricing (3-tier)
+  tou_prices:
+    peak: 0.30                          # Peak hours: 4 PM - 9 PM ($/kWh)
+    mid: 0.20                           # Mid hours: 9 AM - 4 PM, 9 PM - 11 PM ($/kWh)
+    off_peak: 0.10                      # Off-peak: 11 PM - 9 AM ($/kWh)
+  
+  # Episode Parameters
+  max_hours: 24                         # Maximum hours per episode
+  target_soc: 0.9                       # Target SoC at departure (0.9 = 90%)
+  departure_penalty_scale: 100.0       # Penalty scale for low SoC at departure
+  
+  # Reward Weights
+  solar_reward_weight: 1.5              # Weight for solar energy reward
+  grid_cost_weight: 1.0                 # Weight for grid cost penalty
 
-# Neural Network Architecture
+# Neural Network Architecture (for SB3 MlpPolicy)
 network:
-  input_dim: 4                          # Input dimension (cart pos, vel, pole angle, angular vel)
-  hidden_dim: 128                       # Hidden layer size
-  output_dim: 2                         # Output dimension (left/right actions)
+  input_dim: 4                          # Input dimension [solar_output, ev_soc, time_remaining, grid_price]
+  hidden_dim: 128                       # Hidden layer size (used by SB3)
+  output_dim: 2                         # Output dimension (2 discrete actions)
 
-# PPO Algorithm Parameters
+# PPO Algorithm Parameters (Stable Baselines 3)
 ppo:
-  learning_rate: 0.0003                 # Learning rate for optimizer
-  discount_factor: 0.99                 # Gamma - reward discount factor
-  clip_ratio: 0.2                       # Epsilon - PPO clipping ratio
-  update_epochs: 4                      # Number of epochs per PPO update
-  update_frequency: 200                 # Steps between PPO updates
+  learning_rate: 3e-4                   # Learning rate for optimizer
+  n_steps: 2048                         # Number of steps per update
+  batch_size: 64                        # Batch size for training
+  n_epochs: 10                          # Number of epochs per update
+  gamma: 0.99                           # Discount factor
+  gae_lambda: 0.95                      # GAE lambda parameter
+  clip_range: 0.2                       # PPO clipping range
+  ent_coef: 0.01                        # Entropy coefficient
+  vf_coef: 0.5                          # Value function coefficient
 
 # Training Configuration
 training:
-  simulation_speed: 0.05                # Sleep time between steps (seconds)
+  total_timesteps: 100000               # Total training timesteps
+  model_save_path: "models/solar_agent"  # Path to save/load the trained model (SB3 format)
+  onnx_export_path: "solar_agent.onnx"  # Path to save ONNX model for NPU deployment
+  simulation_speed: 0.05                # Sleep time between steps (seconds) - for visualization only
   reward_history_length: 1000           # Maximum reward history to keep
   episode_history_length: 100           # Episodes for running average calculation
-  model_save_path: "models/ppo_cartpole.pth"  # Path to save/load the trained model
-  save_frequency: 50                    # Save model every N episodes (Note: Auto-saves are more frequent early in training)
-  example_mode: true                    # Run pre-trained model from example directory
-  example_model_path: "example/model.pth" # Path to the example trained model (.pth, .pt, or .onnx supported)
-  solved_reward_threshold: 195.0        # Average reward threshold to consider problem solved
-  solved_episodes_window: 100           # Number of consecutive episodes to average for solving criteria
-  stop_when_solved: true                # Whether to stop training when the problem is solved
 
 # Web Server Configuration  
 server:

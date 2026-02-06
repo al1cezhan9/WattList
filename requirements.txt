@@ -4,9 +4,16 @@ flask>=2.0.0
 pyyaml>=5.4.0
 qai-hub>=0.32.0
 
+# Reinforcement Learning
+gymnasium>=0.29.0
+stable-baselines3>=2.0.0
+
 # Core ONNX requirements
 onnx>=1.15.0
 onnxruntime>=1.17.0
+
+# Visualization
+matplotlib>=3.5.0
 
 # For Snapdragon X Elite NPU support, you'll need:
 # onnxruntime-qnn (Qualcomm specific package - install separately)
