@@ -1,0 +1,66 @@
+# Default configuration for EV Charging RL Training
+
+# Environment parameters
+environment:
+  ev_capacity_kwh: 75.0              # EV battery capacity
+  charging_efficiency: 0.90          # Charging efficiency (90%)
+  max_charging_power_kw: 7.4         # Maximum charging power
+  target_soc: 0.90                   # Target SoC at departure
+  lambda_penalty: 100.0               # Terminal penalty weight for undercharge
+  
+  # PV/Solar parameters
+  max_pv_output_kw: 10.0             # Maximum PV output
+  pv_noise_std: 0.5                  # PV noise standard deviation
+  pv_ar_coef: 0.7                    # AR(1) correlation coefficient
+  pv_forecast_bias: 0.1              # Forecast bias (10% overestimate)
+  
+  # Grid pricing (Time-of-Use)
+  tou_prices:
+    off_peak: 0.10                   # 11 PM - 9 AM ($/kWh)
+    mid: 0.20                        # 9 AM - 4 PM, 9 PM - 11 PM
+    peak: 0.30                       # 4 PM - 9 PM
+  
+  # Departure model
+  departure_drift_rate: 0.01         # Non-stationary drift rate
+  num_user_types: 3                  # Number of hidden user types
+  base_hazard_rates: [0.05, 0.10, 0.15]  # Per-timestep hazard rates
+  max_episode_steps: 96              # Maximum episode length (24 hours = 96 * 15min)
+
+# Recurrent PPO parameters
+recurrent_ppo:
+  policy: "MlpLstmPolicy"            # LSTM policy type
+  learning_rate: 3e-4                # Learning rate
+  n_steps: 2048                      # Steps per update
+  batch_size: 64                     # Batch size
+  n_epochs: 10                       # Epochs per update
+  gamma: 0.99                        # Discount factor
+  gae_lambda: 0.95                   # GAE lambda
+  clip_range: 0.2                    # PPO clip range
+  ent_coef: 0.01                     # Entropy coefficient
+  vf_coef: 0.5                       # Value function coefficient
+  
+  # LSTM-specific
+  lstm_hidden_size: 64               # LSTM hidden size
+  n_lstm_layers: 1                   # Number of LSTM layers
+
+# Training configuration
+training:
+  total_timesteps: 500000            # Total training timesteps
+  log_interval: 10                   # Log every N episodes
+  save_freq: 50000                   # Save model every N timesteps
+  eval_freq: 10000                   # Evaluate every N timesteps
+  n_eval_episodes: 10                # Episodes for evaluation
+  model_save_path: "models/recurrent_ppo_ev_charging"
+  tensorboard_log: "./tensorboard_logs/"
+
+# Evaluation configuration
+evaluation:
+  n_episodes: 100                    # Episodes for final evaluation
+  render: false                      # Render during evaluation
+
+# ONNX export configuration
+onnx_export:
+  output_path: "models/ev_charging_policy.onnx"
+  opset_version: 11                  # ONNX opset version
+  input_shape: [1, 12]               # Fixed input shape (batch=1, obs_dim=12)
+  dynamic_axes: false                # Fixed shape for mobile deployment

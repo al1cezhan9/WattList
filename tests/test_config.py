@@ -1,4 +1,4 @@
-"""
+  vbng{{{{{{{{{{{{{}}}}}}}}}}}}}"""
 Tests for the configuration module.
 """
 import os
