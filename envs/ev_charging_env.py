@@ -31,7 +31,7 @@ class EVChargingEnv(gym.Env):
     
     Action space: Discrete(2)
     - 0: solar only charging
-    - 1: solar + grid charging
+    - 1: grid only charging
     
     Episode ends when EV departs (hidden hazard process).
     """
@@ -48,8 +48,8 @@ class EVChargingEnv(gym.Env):
         self.ev_capacity_kwh = config.get('ev_capacity_kwh', 75.0)
         self.charging_efficiency = config.get('charging_efficiency', 0.90)
         self.max_charging_power_kw = config.get('max_charging_power_kw', 7.4)
-        self.target_soc = config.get('target_soc', 0.90)
-        self.lambda_penalty = config.get('lambda_penalty', 100.0)  # Terminal penalty weight
+        self.target_soc = config.get('target_soc', 0.70)
+        self.lambda_penalty = config.get('lambda_penalty', 25.0)  # Terminal penalty weight (reduced)
         
         # Solar/PV parameters
         self.max_pv_output_kw = config.get('max_pv_output_kw', 10.0)
@@ -64,10 +64,8 @@ class EVChargingEnv(gym.Env):
             'peak': 0.30       # 4 PM - 9 PM
         })
         
-        # Departure model parameters
-        self.departure_drift_rate = config.get('departure_drift_rate', 0.01)
-        self.num_user_types = config.get('num_user_types', 3)
-        self.base_hazard_rates = config.get('base_hazard_rates', [0.05, 0.10, 0.15])  # Per timestep
+        # Departure model parameters (single user type)
+        self.base_hazard_rate = config.get('base_hazard_rate', 0.02)  # Single hazard rate per timestep
         
         # Timestep: 15 minutes
         self.timestep_minutes = 15
@@ -90,8 +88,6 @@ class EVChargingEnv(gym.Env):
         self.time_elapsed = 0
         self.current_hour = 0.0  # Hour of day (0-24)
         self.pv_ar_state = 0.0  # AR(1) state for PV noise
-        self.user_type = 0  # Hidden user type
-        self.user_type_weights = np.ones(self.num_user_types) / self.num_user_types  # Non-stationary weights
         
         # Episode tracking
         self.episode_cost = 0.0
@@ -145,39 +141,22 @@ class EVChargingEnv(gym.Env):
         
         if 16 <= hour_normalized < 21:  # 4 PM - 9 PM
             return self.tou_prices['peak']
-        elif (9 <= hour_normalized < 16) or (21 <= hour_normalized < 23):
+        elif (9 <= hour_normalized < 16) or (21 <= hour_normalized < 23):  # 9 AM - 4 PM, 9 PM - 11 PM
             return self.tou_prices['mid']
-        else:  # 11 PM - 9 AM
+        else:  # 11 PM - 9 AM (hours 23, 0-8.999)
             return self.tou_prices['off_peak']
     
     def _sample_departure(self) -> bool:
         """
-        Sample departure using hidden hazard-based model.
+        Sample departure using hazard-based model.
         Returns True if EV departs this timestep.
         """
-        # Sample user type from non-stationary distribution
-        self.user_type = np.random.choice(
-            self.num_user_types,
-            p=self.user_type_weights
-        )
-        
-        # Get hazard rate for current user type
-        hazard_rate = self.base_hazard_rates[self.user_type]
-        
         # Increase hazard with time elapsed (more likely to leave later)
         time_factor = 1.0 + (self.time_elapsed / self.max_episode_steps) * 2.0
-        adjusted_hazard = hazard_rate * time_factor
+        adjusted_hazard = self.base_hazard_rate * time_factor
         
         # Sample departure
         return np.random.random() < adjusted_hazard
-    
-    def _update_user_type_distribution(self):
-        """Update user type distribution (non-stationary drift)."""
-        # Simple drift: shift weights slightly
-        drift = np.random.normal(0, self.departure_drift_rate, size=self.num_user_types)
-        self.user_type_weights += drift
-        self.user_type_weights = np.clip(self.user_type_weights, 0.01, 1.0)
-        self.user_type_weights /= self.user_type_weights.sum()  # Renormalize
     
     def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
         """Reset environment to initial state."""
@@ -194,15 +173,6 @@ class EVChargingEnv(gym.Env):
         self.pv_ar_state = np.random.normal(0, self.pv_noise_std)
         self.episode_cost = 0.0
         self.total_grid_energy = 0.0
-        
-        # Update user type distribution (non-stationary)
-        self._update_user_type_distribution()
-        
-        # Sample initial user type
-        self.user_type = np.random.choice(
-            self.num_user_types,
-            p=self.user_type_weights
-        )
         
         # Get initial observation
         observation = self._get_observation()
@@ -232,7 +202,7 @@ class EVChargingEnv(gym.Env):
         Execute one timestep (15 minutes).
         
         Args:
-            action: 0 (solar only) or 1 (solar + grid)
+            action: 0 (solar only) or 1 (grid only)
         
         Returns:
             observation, reward, terminated, truncated, info
@@ -245,9 +215,9 @@ class EVChargingEnv(gym.Env):
         if action == 0:  # Solar only
             charging_power_kw = np.minimum(pv_output, self.max_charging_power_kw)
             grid_power_kw = 0.0
-        else:  # Action 1: Solar + Grid
+        else:  # Action 1: Grid only
             charging_power_kw = self.max_charging_power_kw
-            grid_power_kw = np.maximum(0.0, self.max_charging_power_kw - pv_output)
+            grid_power_kw = self.max_charging_power_kw  # All from grid
         
         # Update SoC (15 minutes = 0.25 hours)
         energy_added_kwh = charging_power_kw * 0.25 * self.charging_efficiency
@@ -272,10 +242,10 @@ class EVChargingEnv(gym.Env):
         # Check for departure (hidden process)
         terminated = self._sample_departure()
         
-        # Apply terminal penalty if SoC < target
+        # Apply terminal penalty if SoC < target (reduced penalty)
         if terminated:
             soc_deficit = max(0.0, self.target_soc - self.current_soc)
-            terminal_penalty = -self.lambda_penalty * soc_deficit
+            terminal_penalty = -self.lambda_penalty * soc_deficit  # Reduced lambda_penalty
             reward += terminal_penalty
         
         # Check truncation (max episode length)

@@ -12,7 +12,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from envs import EVChargingEnv
-from baselines import SolarFirstGreedy, ConservativeDeadline, EmpiricalSurvival
+from baselines import SolarFirstGreedy, ConservativeDeadline
 
 
 def load_config(config_path: str = "configs/default.yaml") -> dict:
@@ -66,10 +66,6 @@ def evaluate_policy(env, model, n_episodes: int = 100, deterministic: bool = Tru
             episode_cost -= reward  # Reward is negative cost
             episode_length += 1
             episode_starts[0] = done
-            
-            # Update baseline if needed
-            if isinstance(model, EmpiricalSurvival) and done:
-                model.update_departure(episode_length)
         
         costs.append(episode_cost)
         final_socs.append(info['soc'])
@@ -131,16 +127,9 @@ def main():
     )
     results['Conservative Deadline'] = evaluate_policy(env, baseline2, n_episodes)
     
-    print("\n3. Evaluating Empirical Survival Baseline...")
-    baseline3 = EmpiricalSurvival(
-        env_config['target_soc'],
-        env_config['max_charging_power_kw']
-    )
-    results['Empirical Survival'] = evaluate_policy(env, baseline3, n_episodes)
-    
     # Evaluate RL policy if provided
     if args.model and os.path.exists(args.model):
-        print(f"\n4. Evaluating Recurrent PPO Policy ({args.model})...")
+        print(f"\n3. Evaluating Recurrent PPO Policy ({args.model})...")
         try:
             rl_model = RecurrentPPO.load(args.model, device='cpu')
             results['Recurrent PPO'] = evaluate_policy(env, rl_model, n_episodes, deterministic=True)

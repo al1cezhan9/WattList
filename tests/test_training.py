@@ -1,414 +1,162 @@
 """
-Tests for the training module including both training and example modes.
+Tests for training script and model creation.
 """
+import os
+import tempfile
 import pytest
-import numpy as np
-from collections import deque
-from unittest.mock import Mock, patch, MagicMock
-from src.training import training_loop, example_mode_loop
+import yaml
+from sb3_contrib import RecurrentPPO
+from stable_baselines3.common.vec_env import DummyVecEnv
+from envs import EVChargingEnv
 
 
-class TestTrainingLoop:
-    
-    def test_training_loop_initialization(self, sample_config, mock_shared_state):
-        """Test training loop basic setup and initialization."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
-        
-        # Mock environment and agent
-        mock_env = Mock()
-        mock_env.reset.return_value = np.array([0.1, 0.2, 0.05, 0.1])
-        mock_env.step.return_value = (np.array([0.11, 0.21, 0.04, 0.09]), 1.0, False)
-        
-        mock_agent = Mock()
-        mock_agent.select_action.return_value = (0, -0.693, 0.5)
-        mock_agent.load_model.return_value = None
-        
-        # Stop the loop immediately by setting running_flag to False
-        running_flag['value'] = False
-        
-        # Run training loop (will exit immediately due to running_flag)
-        training_loop(
-            env=mock_env,
-            agent=mock_agent,
-            simulation_speed=0.001,  # Minimal delay
-            summary_frequency=10,
-            update_frequency=5,
-            model_save_path="test_model.pth",
-            save_frequency=10,
-            solved_threshold=195.0,
-            solved_window=100,
-            stop_when_solved=True,
-            current_state=current_state,
-            reward_history=reward_history,
-            episode_rewards=episode_rewards,
-            running_flag=running_flag
-        )
-        
-        # Verify basic setup occurred
-        mock_agent.load_model.assert_called_once()
-    
-    def test_training_loop_episode_execution(self, sample_config, mock_shared_state):
-        """Test that training loop executes episodes properly."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
-        
-        # Mock environment
-        mock_env = Mock()
-        reset_states = [
-            np.array([0.1, 0.2, 0.05, 0.1]),
-            np.array([0.0, 0.0, 0.0, 0.0])
-        ]
-        mock_env.reset.side_effect = reset_states
-        
-        # Create a sequence of steps that leads to episode end
-        step_results = [
-            (np.array([0.11, 0.21, 0.04, 0.09]), 1.0, False),
-            (np.array([0.12, 0.22, 0.03, 0.08]), 1.0, False),
-            (np.array([0.13, 0.23, 0.02, 0.07]), 1.0, True)  # Episode ends
-        ]
-        mock_env.step.side_effect = step_results
-        
-        # Mock agent
-        mock_agent = Mock()
-        mock_agent.select_action.return_value = (1, -0.693, 0.5)
-        mock_agent.load_model.return_value = None
-        
-        # Stop after one episode
-        episode_count = 0
-        def counting_reset():
-            nonlocal episode_count
-            episode_count += 1
-            if episode_count > 1:
-                running_flag['value'] = False
-            return reset_states[min(episode_count - 1, len(reset_states) - 1)]
-        mock_env.reset.side_effect = counting_reset
-        
-        # Run training loop
-        training_loop(
-            env=mock_env,
-            agent=mock_agent,
-            simulation_speed=0.001,
-            summary_frequency=1,
-            update_frequency=10,
-            model_save_path="test_model.pth",
-            save_frequency=1,
-            solved_threshold=195.0,
-            solved_window=100,
-            stop_when_solved=True,
-            current_state=current_state,
-            reward_history=reward_history,
-            episode_rewards=episode_rewards,
-            running_flag=running_flag
-        )
-        
-        # Verify environment interactions
-        assert mock_env.reset.call_count >= 1
-        assert mock_env.step.call_count >= 1
-        
-        # Verify agent interactions
-        assert mock_agent.select_action.call_count >= 1
-        assert mock_agent.store_transition.call_count >= 1
-    
-    def test_training_loop_state_updates(self, sample_config, mock_shared_state):
-        """Test that training loop updates shared state correctly."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
-        
-        # Mock environment
-        mock_env = Mock()
-        mock_env.reset.return_value = np.array([0.1, 0.2, 0.05, 0.1])
-        
-        test_state = np.array([0.5, 1.0, 0.1, 0.2])
-        test_reward = 1.0
-        mock_env.step.return_value = (test_state, test_reward, True)  # End episode immediately
-        
-        # Mock agent
-        mock_agent = Mock()
-        mock_agent.select_action.return_value = (0, -0.693, 0.5)
-        mock_agent.load_model.return_value = None
-        
-        # Stop after first episode
-        episode_count = 0
-        def stop_after_episode(*args):
-            nonlocal episode_count
-            episode_count += 1
-            if episode_count > 0:
-                running_flag['value'] = False
-            return (test_state, test_reward, True)
-        mock_env.step.side_effect = stop_after_episode
-        
-        # Run training loop
-        training_loop(
-            env=mock_env,
-            agent=mock_agent,
-            simulation_speed=0.001,
-            summary_frequency=1,
-            update_frequency=10,
-            model_save_path="test_model.pth",
-            save_frequency=1,
-            solved_threshold=195.0,
-            solved_window=100,
-            stop_when_solved=True,
-            current_state=current_state,
-            reward_history=reward_history,
-            episode_rewards=episode_rewards,
-            running_flag=running_flag
-        )
-        
-        # Verify state was updated
-        assert current_state['position'] == test_state[0]
-        assert current_state['velocity'] == test_state[1]
-        assert current_state['angle'] == test_state[2]
-        assert current_state['angular_velocity'] == test_state[3]
-        assert current_state['reward'] == test_reward
-    
-    def test_model_loading_resume(self, sample_config, mock_shared_state):
-        """Test training loop resuming from saved model."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
-        
-        # Mock environment and agent
-        mock_env = Mock()
-        mock_env.reset.return_value = np.array([0.0, 0.0, 0.0, 0.0])
-        mock_env.step.return_value = (np.array([0.1, 0.1, 0.1, 0.1]), 1.0, True)
-        
-        mock_agent = Mock()
-        mock_agent.select_action.return_value = (0, -0.693, 0.5)
-        
-        # Mock successful model loading
-        mock_training_state = {
-            'episode': 50,
-            'timestep': 5000,
-            'reward_history': [100.0, 150.0, 200.0],
-            'episode_rewards': [180.0, 190.0, 195.0]
+@pytest.fixture
+def config():
+    """Test configuration."""
+    return {
+        'environment': {
+            'target_soc': 0.70,
+            'base_hazard_rate': 0.02,
+            'max_episode_steps': 96
+        },
+        'recurrent_ppo': {
+            'policy': 'MlpLstmPolicy',
+            'learning_rate': 3e-4,
+            'n_steps': 128,  # Small for testing
+            'batch_size': 32,
+            'n_epochs': 2,
+            'gamma': 0.99,
+            'gae_lambda': 0.95,
+            'clip_range': 0.2,
+            'ent_coef': 0.01,
+            'vf_coef': 0.5,
+            'lstm_hidden_size': 32,
+            'n_lstm_layers': 1
+        },
+        'training': {
+            'total_timesteps': 1000,  # Very small for testing
+            'num_envs': 1,
+            'model_save_path': 'test_model'
         }
-        mock_agent.load_model.return_value = mock_training_state
-        
-        # Stop immediately
-        running_flag['value'] = False
-        
-        # Run training loop
-        training_loop(
-            env=mock_env,
-            agent=mock_agent,
-            simulation_speed=0.001,
-            summary_frequency=10,
-            update_frequency=10,
-            model_save_path="existing_model.pth",
-            save_frequency=10,
-            solved_threshold=195.0,
-            solved_window=100,
-            stop_when_solved=True,
-            current_state=current_state,
-            reward_history=reward_history,
-            episode_rewards=episode_rewards,
-            running_flag=running_flag
-        )
-        
-        # Verify model loading was attempted
-        mock_agent.load_model.assert_called_once_with("existing_model.pth")
-        
-        # Verify history was restored
-        assert len(reward_history) == 3
-        assert len(episode_rewards) == 3
+    }
 
 
-class TestExampleModeLoop:
+def make_test_env(config):
+    """Create test environment."""
+    def _init():
+        return EVChargingEnv(config['environment'])
+    return _init
+
+
+class TestModelCreation:
+    """Test model creation and basic training."""
     
-    @patch('src.training.ExampleModeAgent')
-    @patch('os.path.exists')
-    def test_example_mode_initialization(self, mock_exists, mock_example_agent_class, sample_config, mock_shared_state):
-        """Test example mode loop initialization."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
+    def test_model_initialization(self, config):
+        """Test that model can be created."""
+        env = DummyVecEnv([make_test_env(config)])
         
-        # Mock file exists check
-        mock_exists.return_value = True
-        
-        # Mock environment and agent
-        mock_env = Mock()
-        mock_env.reset.return_value = np.array([0.0, 0.0, 0.01, 0.0])  # Slight initial angle
-        mock_env.step.return_value = (np.array([0.01, 0.1, 0.005, -0.1]), 1.0, False)
-        
-        # Mock ExampleModeAgent
-        mock_example_agent = Mock()
-        mock_example_agent.get_format_info.return_value = {'format': 'pth', 'supports_value_estimation': True}
-        mock_example_agent.get_training_state.return_value = {'episode': 100}
-        mock_example_agent.select_action.return_value = (1, -0.693, 0.8)
-        mock_example_agent_class.return_value = mock_example_agent
-        
-        # Stop immediately by setting the flag to False
-        running_flag['value'] = False
-        
-        # Run example mode
-        example_mode_loop(
-            env=mock_env,
-            agent=None,  # Not used anymore
-            simulation_speed=0.01,
-            example_model_path="example/model.pth",
-            current_state=current_state,
-            running_flag=running_flag,
-            config=sample_config
+        model = RecurrentPPO(
+            config['recurrent_ppo']['policy'],
+            env,
+            learning_rate=config['recurrent_ppo']['learning_rate'],
+            n_steps=config['recurrent_ppo']['n_steps'],
+            batch_size=config['recurrent_ppo']['batch_size'],
+            n_epochs=config['recurrent_ppo']['n_epochs'],
+            gamma=config['recurrent_ppo']['gamma'],
+            gae_lambda=config['recurrent_ppo']['gae_lambda'],
+            clip_range=config['recurrent_ppo']['clip_range'],
+            ent_coef=config['recurrent_ppo']['ent_coef'],
+            vf_coef=config['recurrent_ppo']['vf_coef'],
+            policy_kwargs=dict(
+                lstm_hidden_size=config['recurrent_ppo']['lstm_hidden_size'],
+                n_lstm_layers=config['recurrent_ppo']['n_lstm_layers'],
+            ),
+            verbose=0,
+            device='cpu'
         )
         
-        # Verify ExampleModeAgent was created
-        mock_example_agent_class.assert_called_once_with("example/model.pth", sample_config)
+        assert model is not None
+        assert model.policy is not None
     
-    @patch('src.training.ExampleModeAgent')
-    @patch('os.path.exists')  
-    @patch('src.training.logger')
-    def test_example_mode_model_loading_failure(self, mock_logger, mock_exists, mock_example_agent_class, sample_config, mock_shared_state):
-        """Test example mode with model loading failure."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
+    def test_model_training_step(self, config):
+        """Test that model can perform a training step."""
+        env = DummyVecEnv([make_test_env(config)])
         
-        # Mock file doesn't exist
-        mock_exists.return_value = False
-        
-        # Mock environment and agent
-        mock_env = Mock()
-        mock_agent = Mock()
-        
-        # Stop immediately
-        running_flag['value'] = False
-        
-        # Run example mode
-        example_mode_loop(
-            env=mock_env,
-            agent=mock_agent,
-            simulation_speed=0.01,
-            example_model_path="nonexistent_model.pth",
-            current_state=current_state,
-            running_flag=running_flag,
-            config=sample_config
+        model = RecurrentPPO(
+            config['recurrent_ppo']['policy'],
+            env,
+            learning_rate=config['recurrent_ppo']['learning_rate'],
+            n_steps=config['recurrent_ppo']['n_steps'],
+            batch_size=config['recurrent_ppo']['batch_size'],
+            n_epochs=config['recurrent_ppo']['n_epochs'],
+            policy_kwargs=dict(
+                lstm_hidden_size=config['recurrent_ppo']['lstm_hidden_size'],
+                n_lstm_layers=config['recurrent_ppo']['n_lstm_layers'],
+            ),
+            verbose=0,
+            device='cpu'
         )
         
-        # Verify error was logged (function should return early)
-        mock_logger.error.assert_called()
+        # Train for a few steps
+        model.learn(total_timesteps=config['recurrent_ppo']['n_steps'] * 2)
+        
+        # Model should still be valid
+        assert model is not None
     
-    @patch('src.training.ExampleModeAgent')
-    @patch('os.path.exists')
-    def test_example_mode_continuous_running(self, mock_exists, mock_example_agent_class, sample_config, mock_shared_state):
-        """Test that example mode runs continuously with good performance."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
+    def test_model_save_load(self, config):
+        """Test model saving and loading."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = DummyVecEnv([make_test_env(config)])
+            
+            model = RecurrentPPO(
+                config['recurrent_ppo']['policy'],
+                env,
+                learning_rate=config['recurrent_ppo']['learning_rate'],
+                n_steps=config['recurrent_ppo']['n_steps'],
+                policy_kwargs=dict(
+                    lstm_hidden_size=config['recurrent_ppo']['lstm_hidden_size'],
+                    n_lstm_layers=config['recurrent_ppo']['n_lstm_layers'],
+                ),
+                verbose=0,
+                device='cpu'
+            )
+            
+            # Train briefly
+            model.learn(total_timesteps=config['recurrent_ppo']['n_steps'])
+            
+            # Save model
+            save_path = os.path.join(tmpdir, 'test_model.zip')
+            model.save(save_path)
+            assert os.path.exists(save_path)
+            
+            # Load model
+            loaded_model = RecurrentPPO.load(save_path, device='cpu')
+            assert loaded_model is not None
+            assert loaded_model.policy is not None
+    
+    def test_model_prediction(self, config):
+        """Test model prediction."""
+        env = DummyVecEnv([make_test_env(config)])
         
-        # Mock file exists check
-        mock_exists.return_value = True
-        
-        # Mock environment - simulate good cart-pole balance
-        mock_env = Mock()
-        
-        # Create sequence of balanced states
-        balanced_states = [
-            np.array([0.0, 0.0, 0.01, 0.0]),   # Reset state
-            np.array([0.01, 0.1, 0.005, -0.05]),  # Balancing
-            np.array([0.02, 0.05, 0.002, -0.02]),  # Still balancing
-            np.array([0.01, -0.05, 0.001, 0.01])   # Good balance
-        ]
-        
-        step_count = 0
-        def mock_step(action):
-            nonlocal step_count
-            step_count += 1
-            # Return good rewards and no termination for first few steps
-            if step_count < 200:  # Long episode
-                return balanced_states[step_count % len(balanced_states)], 1.0, False
-            else:
-                return balanced_states[0], 1.0, True  # End episode eventually
-        
-        mock_env.reset.return_value = balanced_states[0]
-        mock_env.step.side_effect = mock_step
-        
-        # Mock ExampleModeAgent - simulate good policy  
-        mock_example_agent = Mock()
-        mock_example_agent.get_format_info.return_value = {'format': 'pth', 'supports_value_estimation': True}
-        mock_example_agent.get_training_state.return_value = {'episode': 100, 'total_timesteps': 10000}
-        mock_example_agent_class.return_value = mock_example_agent
-        
-        # Agent makes good decisions
-        def smart_action_selection(state):
-            # Simple policy: if pole leaning right, push cart right
-            angle = state[2]
-            action = 1 if angle > 0 else 0
-            return action, -0.693, 0.9  # High value for good states
-        
-        mock_example_agent.select_action.side_effect = smart_action_selection
-        
-        # Stop after limited steps for testing
-        step_count_limit = 3  # Run just a few steps
-        original_simulation_speed = 0.001  # Fast simulation
-        
-        # Create a custom environment that stops after a few steps
-        step_count = 0
-        def tracking_step(action):
-            nonlocal step_count
-            step_count += 1
-            if step_count >= step_count_limit:
-                running_flag['value'] = False
-            return (np.array([0.1, 0.2, 0.05, 0.1]), 1.0, step_count >= step_count_limit)
-        
-        mock_env.step.side_effect = tracking_step
-        
-        # Run example mode
-        example_mode_loop(
-            env=mock_env,
-            agent=None,  # Not used anymore
-            simulation_speed=0.001,  # Fast for testing
-            example_model_path="example_model.pth",
-            current_state=current_state,
-            running_flag=running_flag,
-            config=sample_config
+        model = RecurrentPPO(
+            config['recurrent_ppo']['policy'],
+            env,
+            learning_rate=config['recurrent_ppo']['learning_rate'],
+            n_steps=config['recurrent_ppo']['n_steps'],
+            policy_kwargs=dict(
+                lstm_hidden_size=config['recurrent_ppo']['lstm_hidden_size'],
+                n_lstm_layers=config['recurrent_ppo']['n_lstm_layers'],
+            ),
+            verbose=0,
+            device='cpu'
         )
         
-        # Verify good performance metrics
-        assert current_state['position'] == 0.1  # Should be updated from last step
-        assert current_state['angle'] == 0.05    # Should be updated from last step  
-        assert mock_env.step.call_count > 0
-        assert mock_example_agent.select_action.call_count > 0
-    
-    @patch('src.training.ExampleModeAgent')
-    @patch('os.path.exists')
-    def test_example_mode_state_updates(self, mock_exists, mock_example_agent_class, sample_config, mock_shared_state):
-        """Test that example mode updates state correctly."""
-        current_state, reward_history, episode_rewards, running_flag = mock_shared_state
+        # Get observation
+        obs = env.reset()
         
-        # Mock file exists check
-        mock_exists.return_value = True
+        # Predict action
+        action, _ = model.predict(obs, deterministic=True)
         
-        # Mock environment
-        mock_env = Mock()
-        test_state = np.array([0.5, 1.0, 0.1, 0.2])
-        test_reward = 1.0
-        
-        mock_env.reset.return_value = np.array([0.0, 0.0, 0.0, 0.0])
-        mock_env.step.return_value = (test_state, test_reward, False)
-        
-        # Mock ExampleModeAgent
-        mock_example_agent = Mock()
-        mock_example_agent.get_format_info.return_value = {'format': 'pth', 'supports_value_estimation': True}
-        mock_example_agent.get_training_state.return_value = {'episode': 100, 'total_timesteps': 10000}
-        mock_example_agent.select_action.return_value = (1, -0.693, 0.8)
-        mock_example_agent_class.return_value = mock_example_agent
-        
-        # Stop after one step
-        step_count = 0
-        def stop_after_one_step(*args):
-            nonlocal step_count
-            step_count += 1
-            if step_count > 0:
-                running_flag['value'] = False
-            return (test_state, test_reward, False)
-        mock_env.step.side_effect = stop_after_one_step
-        
-        # Run example mode
-        example_mode_loop(
-            env=mock_env,
-            agent=None,  # Not used anymore
-            simulation_speed=0.001,
-            example_model_path="test_model.pth",
-            current_state=current_state,
-            running_flag=running_flag,
-            config=sample_config
-        )
-        
-        # Verify state was updated (reward is not updated in example mode)
-        assert current_state['position'] == test_state[0]
-        assert current_state['velocity'] == test_state[1]
-        assert current_state['angle'] == test_state[2]
-        assert current_state['angular_velocity'] == test_state[3]
-        # Note: reward is intentionally kept frozen in example mode
+        # Check action is valid
+        assert action in [0, 1]
+        assert action.shape == (1,)

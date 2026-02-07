@@ -1,3 +1,3 @@
-from .heuristics import SolarFirstGreedy, ConservativeDeadline, EmpiricalSurvival
+from .heuristics import SolarFirstGreedy, ConservativeDeadline
 
-__all__ = ['SolarFirstGreedy', 'ConservativeDeadline', 'EmpiricalSurvival']
+__all__ = ['SolarFirstGreedy', 'ConservativeDeadline']

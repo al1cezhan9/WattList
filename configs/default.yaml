@@ -5,8 +5,8 @@ environment:
   ev_capacity_kwh: 75.0              # EV battery capacity
   charging_efficiency: 0.90          # Charging efficiency (90%)
   max_charging_power_kw: 7.4         # Maximum charging power
-  target_soc: 0.90                   # Target SoC at departure
-  lambda_penalty: 100.0               # Terminal penalty weight for undercharge
+  target_soc: 0.70                   # Target SoC at departure
+  lambda_penalty: 25.0               # Terminal penalty weight
   
   # PV/Solar parameters
   max_pv_output_kw: 10.0             # Maximum PV output
@@ -20,19 +20,17 @@ environment:
     mid: 0.20                        # 9 AM - 4 PM, 9 PM - 11 PM
     peak: 0.30                       # 4 PM - 9 PM
   
-  # Departure model
-  departure_drift_rate: 0.01         # Non-stationary drift rate
-  num_user_types: 3                  # Number of hidden user types
-  base_hazard_rates: [0.05, 0.10, 0.15]  # Per-timestep hazard rates
+  # Departure model (single user type)
+  base_hazard_rate: 0.02             # Single hazard rate per timestep
   max_episode_steps: 96              # Maximum episode length (24 hours = 96 * 15min)
 
 # Recurrent PPO parameters
 recurrent_ppo:
   policy: "MlpLstmPolicy"            # LSTM policy type
   learning_rate: 3e-4                # Learning rate
-  n_steps: 2048                      # Steps per update
+  n_steps: 2048                      # Steps per update (reduce to 1024 for faster training)
   batch_size: 64                     # Batch size
-  n_epochs: 10                       # Epochs per update
+  n_epochs: 10                       # Epochs per update (reduce to 5 for faster training)
   gamma: 0.99                        # Discount factor
   gae_lambda: 0.95                   # GAE lambda
   clip_range: 0.2                    # PPO clip range
@@ -40,16 +38,17 @@ recurrent_ppo:
   vf_coef: 0.5                       # Value function coefficient
   
   # LSTM-specific
-  lstm_hidden_size: 64               # LSTM hidden size
+  lstm_hidden_size: 64               # LSTM hidden size (reduce to 32 for faster training)
   n_lstm_layers: 1                   # Number of LSTM layers
 
 # Training configuration
 training:
-  total_timesteps: 500000            # Total training timesteps
+  total_timesteps: 500000            # Total training timesteps (reduce to 200000 for faster training)
+  num_envs: 1                        # Number of parallel environments (increase to 4 for faster training)
   log_interval: 10                   # Log every N episodes
   save_freq: 50000                   # Save model every N timesteps
-  eval_freq: 10000                   # Evaluate every N timesteps
-  n_eval_episodes: 10                # Episodes for evaluation
+  eval_freq: 10000                   # Evaluate every N timesteps (increase to 20000 for faster training)
+  n_eval_episodes: 10                # Episodes for evaluation (reduce to 5 for faster training)
   model_save_path: "models/recurrent_ppo_ev_charging"
   tensorboard_log: "./tensorboard_logs/"
 

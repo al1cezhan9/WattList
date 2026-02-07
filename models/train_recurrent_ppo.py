@@ -64,8 +64,13 @@ def train_recurrent_ppo(config_path: str = "configs/default.yaml"):
     torch.manual_seed(seed)
     
     # Create vectorized environment
-    env = DummyVecEnv([make_env(config, i) for i in range(1)])
+    # Use parallel environments for faster training (adjust num_envs as needed)
+    num_envs = train_config.get('num_envs', 1)  # Default: 1, increase for speed
+    env = DummyVecEnv([make_env(config, i) for i in range(num_envs)])
     eval_env = DummyVecEnv([make_env(config, i) for i in range(1)])
+    
+    if num_envs > 1:
+        print(f"✅ Using {num_envs} parallel environments for faster training")
     
     print(f"Observation space: {env.observation_space}")
     print(f"Action space: {env.action_space}")
